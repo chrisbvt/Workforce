@@ -156,6 +156,27 @@ function CrewExecutions() {
                 </Box>
               )}
 
+              {selectedExecution.allowed_tools && (
+                <Box mb={2}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Allowed Tools
+                  </Typography>
+                  <Paper sx={{ p: 2 }}>
+                    <Box display="flex" flexWrap="wrap" gap={1}>
+                      {selectedExecution.allowed_tools.map((tool, index) => (
+                        <Chip
+                          key={index}
+                          label={tool}
+                          color="primary"
+                          variant="outlined"
+                          size="small"
+                        />
+                      ))}
+                    </Box>
+                  </Paper>
+                </Box>
+              )}
+
               {selectedExecution.task_params && (
                 <Box mb={2}>
                   <Typography variant="subtitle2" gutterBottom>

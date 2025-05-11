@@ -18,6 +18,7 @@ import {
   OutlinedInput,
   InputAdornment,
   CircularProgress,
+  Chip,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -45,31 +46,38 @@ function CrewEdit() {
 
   useEffect(() => {
     const fetchCrew = async () => {
+      if (!id) {
+        setError('No crew ID provided');
+        setLoading(false);
+        return;
+      }
+
       try {
         const response = await axios.get(`${API_URL}/crews/${id}`);
         const crewData = response.data;
         
         // Transform the data to match our form structure
         setCrew({
-          name: crewData.name,
-          description: crewData.description,
+          name: crewData.name || '',
+          description: crewData.description || '',
           input_variables: crewData.input_variables || {},
           output_variables: crewData.output_variables || {},
-          agents: crewData.agents.map(agent => ({
-            role: agent.role,
-            goal: agent.goal,
-            backstory: agent.backstory,
-            verbose: agent.verbose,
-            llm_provider: agent.llm_config.provider,
-            llm_model: agent.llm_config.model,
-            llm_base_url: agent.llm_config.base_url,
-            llm_api_key: agent.llm_config.api_key,
-            llm_api_version: agent.llm_config.api_version
+          agents: (crewData.agents || []).map(agent => ({
+            role: agent.role || '',
+            goal: agent.goal || '',
+            backstory: agent.backstory || '',
+            verbose: agent.verbose || true,
+            llm_provider: agent.llm_config?.provider || 'anthropic',
+            llm_model: agent.llm_config?.model || 'claude-3-5-haiku-20241022',
+            llm_base_url: agent.llm_config?.base_url || null,
+            llm_api_key: agent.llm_config?.api_key || null,
+            llm_api_version: agent.llm_config?.api_version || null,
+            allowed_tools: agent.allowed_tools || [],
           })),
-          tasks: crewData.tasks.map(task => ({
-            description: task.description,
-            agent_role: task.agent_role,
-            expected_output: task.expected_output,
+          tasks: (crewData.tasks || []).map(task => ({
+            description: task.description || '',
+            agent_role: task.agent_role || '',
+            expected_output: task.expected_output || '',
             input_parameters: task.input_parameters || {},
             context_variables: task.context_variables || {},
             output_variables: task.output_variables || {},
@@ -186,7 +194,8 @@ function CrewEdit() {
           llm_model: "claude-3-5-haiku-20241022",
           llm_base_url: null,
           llm_api_key: null,
-          llm_api_version: null
+          llm_api_version: null,
+          allowed_tools: [],
         },
       ],
     });
@@ -222,55 +231,13 @@ function CrewEdit() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    let transformedCrew;
+    setError(null);
+
     try {
       // Transform the data to match the backend's expected format
-      transformedCrew = {
-        ...crew,
-        agents: crew.agents.map(agent => ({
-          role: agent.role,
-          goal: agent.goal,
-          backstory: agent.backstory,
-          verbose: agent.verbose,
-          llm_config: {
-            provider: agent.llm_provider,
-            model: agent.llm_model,
-            base_url: agent.llm_base_url,
-            api_key: agent.llm_api_key,
-            api_version: agent.llm_api_version
-          }
-        })),
-        tasks: crew.tasks.map(task => ({
-          ...task,
-          input_parameters: Object.entries(task.input_parameters || {}).reduce((acc, [key, value]) => ({
-            ...acc,
-            [key]: {
-              name: key,
-              description: value,
-              type: "string",
-              required: true
-            }
-          }), {}),
-          context_variables: Object.entries(task.context_variables || {}).reduce((acc, [key, value]) => ({
-            ...acc,
-            [key]: {
-              name: key,
-              description: value,
-              type: "string",
-              required: true
-            }
-          }), {}),
-          output_variables: Object.entries(task.output_variables || {}).reduce((acc, [key, value]) => ({
-            ...acc,
-            [key]: {
-              name: key,
-              description: value,
-              type: "string",
-              required: true
-            }
-          }), {})
-        })),
-        // Transform crew-level variables
+      const transformedCrew = {
+        name: crew.name,
+        description: crew.description,
         input_variables: Object.entries(crew.input_variables || {}).reduce((acc, [key, value]) => ({
           ...acc,
           [key]: {
@@ -288,28 +255,41 @@ function CrewEdit() {
             type: "string",
             required: true
           }
-        }), {})
+        }), {}),
+        agents: crew.agents.map(agent => ({
+          role: agent.role,
+          goal: agent.goal,
+          backstory: agent.backstory,
+          verbose: agent.verbose,
+          llm_config: {
+            provider: agent.llm_provider,
+            model: agent.llm_model,
+            base_url: agent.llm_base_url,
+            api_key: agent.llm_api_key,
+            api_version: agent.llm_api_version
+          },
+          allowed_tools: agent.allowed_tools || []
+        })),
+        tasks: crew.tasks.map(task => ({
+          description: task.description,
+          agent_role: task.agent_role,
+          expected_output: task.expected_output,
+          input_parameters: task.input_parameters || {},
+          context_variables: task.context_variables || {},
+          output_variables: task.output_variables || {},
+          dependencies: task.dependencies || []
+        }))
       };
 
-      console.log('Sending crew data:', JSON.stringify(transformedCrew, null, 2));
       const response = await axios.put(`${API_URL}/crews/${id}`, transformedCrew);
-      console.log('Response:', response.data);
       navigate('/');
     } catch (err) {
       console.error('Error updating crew:', err.response?.data || err);
-      console.error('Request payload:', JSON.stringify(crew, null, 2));
-      console.error('Transformed payload:', JSON.stringify(transformedCrew, null, 2));
-      // Handle validation errors
       if (err.response?.data?.detail) {
         if (Array.isArray(err.response.data.detail)) {
-          // Handle array of validation errors
-          const errorMessages = err.response.data.detail.map(e => {
-            console.error('Validation error:', e);
-            return `${e.loc.join('.')}: ${e.msg}`;
-          }).join(', ');
+          const errorMessages = err.response.data.detail.map(e => `${e.loc.join('.')}: ${e.msg}`).join(', ');
           setError(errorMessages);
         } else {
-          // Handle single error message
           setError(err.response.data.detail);
         }
       } else {
@@ -672,6 +652,46 @@ function CrewEdit() {
                     </>
                   )}
                 </Grid>
+              </Grid>
+
+              <Grid item xs={12}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Allowed Tools
+                </Typography>
+                <FormControl fullWidth>
+                  <TextField
+                    select
+                    fullWidth
+                    label="Select Tools"
+                    value={agent.allowed_tools || []}
+                    onChange={(e) => handleAgentChange(index, 'allowed_tools', e.target.value)}
+                    SelectProps={{
+                      multiple: true,
+                      renderValue: (selected) => (
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                          {selected.map((value) => (
+                            <Chip key={value} label={value} size="small" />
+                          ))}
+                        </Box>
+                      ),
+                    }}
+                  >
+                    <MenuItem value="WebSearch">Web Search</MenuItem>
+                    <MenuItem value="Weather">Weather</MenuItem>
+                    <MenuItem value="News">News</MenuItem>
+                    <MenuItem value="CreateJiraIssue">Create Jira Issue</MenuItem>
+                    <MenuItem value="UpdateJiraIssue">Update Jira Issue</MenuItem>
+                    <MenuItem value="DeleteJiraIssue">Delete Jira Issue</MenuItem>
+                    <MenuItem value="AddJiraComment">Add Jira Comment</MenuItem>
+                    <MenuItem value="GetJiraIssue">Get Jira Issue</MenuItem>
+                    <MenuItem value="SearchJiraIssues">Search Jira Issues</MenuItem>
+                    <MenuItem value="CreateConfluencePage">Create Confluence Page</MenuItem>
+                    <MenuItem value="UpdateConfluencePage">Update Confluence Page</MenuItem>
+                    <MenuItem value="DeleteConfluencePage">Delete Confluence Page</MenuItem>
+                    <MenuItem value="GetConfluencePage">Get Confluence Page</MenuItem>
+                    <MenuItem value="SearchConfluencePages">Search Confluence Pages</MenuItem>
+                  </TextField>
+                </FormControl>
               </Grid>
             </Grid>
           </Paper>

@@ -17,6 +17,8 @@ import {
   InputLabel,
   OutlinedInput,
   InputAdornment,
+  Chip,
+  Select,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -207,6 +209,7 @@ function CrewCreate() {
           goal: agent.goal,
           backstory: agent.backstory,
           verbose: agent.verbose,
+          allowed_tools: agent.allowed_tools || [],
           llm_config: {
             provider: agent.llm_provider,
             model: agent.llm_model,
@@ -639,6 +642,34 @@ function CrewCreate() {
                     </>
                   )}
                 </Grid>
+              </Grid>
+
+              <Grid item xs={12}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Allowed Tools
+                </Typography>
+                <FormControl fullWidth>
+                  <InputLabel>Select Tools</InputLabel>
+                  <Select
+                    multiple
+                    value={agent.allowed_tools || []}
+                    onChange={(e) => handleAgentChange(index, 'allowed_tools', e.target.value)}
+                    input={<OutlinedInput label="Select Tools" />}
+                    renderValue={(selected) => (
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                        {selected.map((value) => (
+                          <Chip key={value} label={value} />
+                        ))}
+                      </Box>
+                    )}
+                  >
+                    <MenuItem value="SearchTool">Search Tool</MenuItem>
+                    <MenuItem value="WebScrapingTool">Web Scraping Tool</MenuItem>
+                    <MenuItem value="DataAnalysisTool">Data Analysis Tool</MenuItem>
+                    <MenuItem value="FileOperationTool">File Operation Tool</MenuItem>
+                    <MenuItem value="JiraTool">Jira Tool</MenuItem>
+                  </Select>
+                </FormControl>
               </Grid>
             </Grid>
           </Paper>

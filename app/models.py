@@ -18,6 +18,8 @@ class Crew(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
     description = Column(Text)
+    input_variables = Column(Text, nullable=True)  # JSON string of input variables
+    output_variables = Column(Text, nullable=True)  # JSON string of output variables
     
     # Relationships
     agents = relationship("Agent", secondary=crew_agent_association, back_populates="crews")
@@ -37,6 +39,7 @@ class Agent(Base):
     llm_base_url = Column(String, nullable=True)  # for OpenAI-compatible APIs
     llm_api_key = Column(String, nullable=True)  # for custom API keys
     llm_api_version = Column(String, nullable=True)  # for OpenAI API version
+    allowed_tools = Column(Text, nullable=True)  # JSON string of allowed tools
     
     # Relationships
     crews = relationship("Crew", secondary=crew_agent_association, back_populates="agents")
@@ -71,6 +74,7 @@ class Execution(Base):
     error = Column(Text, nullable=True)
     input_variables = Column(Text, nullable=True)  # JSON string of input variables
     task_params = Column(Text, nullable=True)  # JSON string of task parameters
+    allowed_tools = Column(Text, nullable=True)  # JSON string of allowed tools
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     

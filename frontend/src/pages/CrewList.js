@@ -119,13 +119,25 @@ function CrewList() {
 
   const handleExecuteWithParams = async () => {
     try {
+      if (!selectedCrew || !selectedCrew.id) {
+        setError('No crew selected');
+        return;
+      }
+
       const response = await axios.post(`${API_URL}/crews/${selectedCrew.id}/execute`, {
-        task_params: inputParams.task_params
+        inputs: {
+          ...inputParams.input_variables,
+          ...Object.entries(inputParams.task_params).reduce((acc, [taskId, params]) => ({
+            ...acc,
+            ...params.input_parameters
+          }), {})
+        }
       });
       setExecutionResult(response.data.result);
       setShowParamsDialog(false);
       setShowResultDialog(true);
     } catch (err) {
+      console.error('Error executing crew:', err);
       setError('Failed to execute crew');
       setShowParamsDialog(false);
     }

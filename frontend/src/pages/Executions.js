@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -19,6 +19,10 @@ import {
   DialogContent,
   DialogActions,
   Button,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import axios from 'axios';
@@ -27,55 +31,95 @@ const API_URL = 'http://localhost:8000/api';
 
 function Executions() {
   const [executions, setExecutions] = useState([]);
+  const [crews, setCrews] = useState([]);
+  const [selectedCrew, setSelectedCrew] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedExecution, setSelectedExecution] = useState(null);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const navigate = useNavigate();
+  const { crewId } = useParams();
 
   useEffect(() => {
-    fetchExecutions();
-  }, []);
+    fetchCrews();
+    if (crewId) {
+      setSelectedCrew(crewId);
+      fetchCrewExecutions(crewId);
+    } else {
+      fetchExecutions();
+    }
+  }, [crewId]);
+
+  const fetchCrews = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/crews`);
+      setCrews(response.data.crews || []);
+    } catch (err) {
+      console.error('Error fetching crews:', err);
+    }
+  };
 
   const fetchExecutions = async () => {
     try {
-      const response = await axios.get(`${API_URL}/executions`);
+      const response = await axios.get(`${API_URL}/crews/executions`);
       setExecutions(response.data.executions || []);
       setLoading(false);
     } catch (err) {
       console.error('Error fetching executions:', err);
-      // If it's a 404, just show empty table
-      if (err.response?.status === 404) {
-        setExecutions([]);
-        setLoading(false);
-        return;
-      }
-      
-      let errorMessage = 'Failed to fetch executions';
-      
-      if (err.response?.data) {
-        if (typeof err.response.data === 'string') {
-          errorMessage = err.response.data;
-        } else if (Array.isArray(err.response.data)) {
-          // Handle FastAPI validation errors array
-          errorMessage = err.response.data.map(e => {
-            const location = e.loc ? e.loc.join('.') : '';
-            return `${location}: ${e.msg}`;
-          }).join('\n');
-        } else if (err.response.data.detail) {
-          errorMessage = typeof err.response.data.detail === 'object' 
-            ? JSON.stringify(err.response.data.detail)
-            : err.response.data.detail.toString();
-        } else if (typeof err.response.data === 'object') {
-          // Handle validation error object
-          errorMessage = Object.values(err.response.data)
-            .map(e => typeof e === 'string' ? e : (e.msg || JSON.stringify(e)))
-            .join(', ');
-        }
-      }
-      
-      setError(errorMessage);
+      handleError(err);
+    }
+  };
+
+  const fetchCrewExecutions = async (crewId) => {
+    try {
+      const response = await axios.get(`${API_URL}/crews/${crewId}/executions`);
+      setExecutions(response.data.executions || []);
       setLoading(false);
+    } catch (err) {
+      console.error('Error fetching crew executions:', err);
+      handleError(err);
+    }
+  };
+
+  const handleError = (err) => {
+    if (err.response?.status === 404) {
+      setExecutions([]);
+      setLoading(false);
+      return;
+    }
+    
+    let errorMessage = 'Failed to fetch executions';
+    
+    if (err.response?.data) {
+      if (typeof err.response.data === 'string') {
+        errorMessage = err.response.data;
+      } else if (Array.isArray(err.response.data)) {
+        errorMessage = err.response.data.map(e => {
+          const location = e.loc ? e.loc.join('.') : '';
+          return `${location}: ${e.msg}`;
+        }).join('\n');
+      } else if (err.response.data.detail) {
+        errorMessage = typeof err.response.data.detail === 'object' 
+          ? JSON.stringify(err.response.data.detail)
+          : err.response.data.detail.toString();
+      } else if (typeof err.response.data === 'object') {
+        errorMessage = Object.values(err.response.data)
+          .map(e => typeof e === 'string' ? e : (e.msg || JSON.stringify(e)))
+          .join(', ');
+      }
+    }
+    
+    setError(errorMessage);
+    setLoading(false);
+  };
+
+  const handleCrewChange = (event) => {
+    const crewId = event.target.value;
+    setSelectedCrew(crewId);
+    if (crewId) {
+      fetchCrewExecutions(crewId);
+    } else {
+      fetchExecutions();
     }
   };
 
@@ -111,9 +155,26 @@ function Executions() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        All Executions
-      </Typography>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+        <Typography variant="h4">
+          {selectedCrew ? 'Crew Executions' : 'All Executions'}
+        </Typography>
+        <FormControl sx={{ minWidth: 200 }}>
+          <InputLabel>Crew Filter</InputLabel>
+          <Select
+            value={selectedCrew}
+            label="Crew Filter"
+            onChange={handleCrewChange}
+          >
+            <MenuItem value="">All Executions</MenuItem>
+            {crews.map((crew) => (
+              <MenuItem key={crew.id} value={crew.id}>
+                {crew.name}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </Box>
 
       {executions.length === 0 ? (
         <Paper sx={{ p: 3, textAlign: 'center' }}>
@@ -190,6 +251,26 @@ function Executions() {
                 <Typography variant="subtitle1" gutterBottom>
                   Completed: {new Date(selectedExecution.completed_at).toLocaleString()}
                 </Typography>
+              )}
+              {selectedExecution.allowed_tools && (
+                <Box mb={2}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Allowed Tools
+                  </Typography>
+                  <Paper sx={{ p: 2 }}>
+                    <Box display="flex" flexWrap="wrap" gap={1}>
+                      {selectedExecution.allowed_tools.map((tool, index) => (
+                        <Chip
+                          key={index}
+                          label={tool}
+                          color="primary"
+                          variant="outlined"
+                          size="small"
+                        />
+                      ))}
+                    </Box>
+                  </Paper>
+                </Box>
               )}
               <Typography variant="subtitle1" gutterBottom>
                 Input Variables:

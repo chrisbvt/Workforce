@@ -8,10 +8,11 @@ from sqlalchemy.orm import selectinload
 import os
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, UTC
 
 from app.database import get_db
 from app.models import Crew as DBCrew, Agent as DBAgent, Task as DBTask, Execution as DBExecution
+from app.tools import get_available_tools, TOOL_DESCRIPTIONS
 
 router = APIRouter()
 
@@ -28,6 +29,7 @@ class AgentConfig(BaseModel):
     backstory: str
     verbose: bool = True
     llm_config: Optional[LLMConfig] = None
+    allowed_tools: Optional[List[str]] = None
 
 class ParameterDefinition(BaseModel):
     name: str
@@ -39,27 +41,27 @@ class ParameterDefinition(BaseModel):
 class TaskConfig(BaseModel):
     description: str
     agent_role: str
-    expected_output: Optional[str] = None
-    input_parameters: Optional[Dict[str, ParameterDefinition]] = None  # Task-specific input parameters
-    context_variables: Optional[Dict[str, ParameterDefinition]] = None  # Task-specific context variables
-    dependencies: Optional[List[int]] = None  # List of task IDs this task depends on
-    output_variables: Optional[Dict[str, ParameterDefinition]] = None  # Variables this task will produce
+    expected_output: str
+    input_parameters: Optional[Dict[str, Dict[str, Any]]] = None
+    context_variables: Optional[Dict[str, Dict[str, Any]]] = None
+    output_variables: Optional[Dict[str, Dict[str, Any]]] = None
+    dependencies: Optional[List[str]] = None
 
 class CrewConfig(BaseModel):
     name: str
-    description: str
+    description: Optional[str] = None
+    input_variables: Optional[Dict[str, Dict[str, Any]]] = None
+    output_variables: Optional[Dict[str, Dict[str, Any]]] = None
     agents: List[AgentConfig]
     tasks: List[TaskConfig]
-    input_variables: Optional[Dict[str, ParameterDefinition]] = None  # Crew-level input variables
-    output_variables: Optional[Dict[str, ParameterDefinition]] = None  # Crew-level output variables
 
 class TaskExecutionParams(BaseModel):
     input_parameters: Optional[Dict[str, Any]] = None
     context_variables: Optional[Dict[str, Any]] = None
 
 class CrewExecutionParams(BaseModel):
-    input_variables: Optional[Dict[str, Any]] = None  # Crew-level input variables
-    task_params: Optional[Dict[str, TaskExecutionParams]] = None  # Map of task_id to parameters
+    inputs: Optional[Dict[str, Any]] = None
+    allowed_tools: Optional[List[str]] = None
 
 @router.post("/")
 async def create_crew(crew_config: CrewConfig, db: AsyncSession = Depends(get_db)):
@@ -96,7 +98,8 @@ async def create_crew(crew_config: CrewConfig, db: AsyncSession = Depends(get_db
                 llm_model=llm_config.model,
                 llm_base_url=llm_config.base_url,
                 llm_api_key=llm_config.api_key,
-                llm_api_version=llm_config.api_version
+                llm_api_version=llm_config.api_version,
+                allowed_tools=json.dumps(agent_config.allowed_tools) if agent_config.allowed_tools else None
             )
             db.add(db_agent)
             await db.flush()
@@ -113,8 +116,9 @@ async def create_crew(crew_config: CrewConfig, db: AsyncSession = Depends(get_db
             db_task = DBTask(
                 description=task_config.description,
                 expected_output=task_config.expected_output,
-                input_parameters=json.dumps({k: v.dict() for k, v in task_config.input_parameters.items()}) if task_config.input_parameters else None,
-                context_variables=json.dumps({k: v.dict() for k, v in task_config.context_variables.items()}) if task_config.context_variables else None,
+                input_parameters=json.dumps(task_config.input_parameters) if task_config.input_parameters else None,
+                context_variables=json.dumps(task_config.context_variables) if task_config.context_variables else None,
+                output_variables=json.dumps(task_config.output_variables) if task_config.output_variables else None,
                 dependencies=json.dumps(task_config.dependencies) if task_config.dependencies else None,
                 crew_id=db_crew.id,
                 agent_id=agents[task_config.agent_role].id
@@ -147,6 +151,32 @@ async def list_crews(db: AsyncSession = Depends(get_db)):
     crews = result.scalars().all()
     return {"crews": [{"id": crew.id, "name": crew.name} for crew in crews]}
 
+@router.get("/executions")
+async def list_all_executions(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(DBExecution, DBCrew.name.label('crew_name'))
+        .join(DBCrew, DBExecution.crew_id == DBCrew.id)
+        .order_by(DBExecution.created_at.desc())
+    )
+    executions = result.all()
+    
+    return {
+        "executions": [
+            {
+                "id": execution.Execution.id,
+                "crew_id": execution.Execution.crew_id,
+                "crew_name": execution.crew_name,
+                "status": execution.Execution.status,
+                "result": json.loads(execution.Execution.result) if execution.Execution.result else None,
+                "error": execution.Execution.error,
+                "input_variables": json.loads(execution.Execution.input_variables) if execution.Execution.input_variables else None,
+                "task_params": json.loads(execution.Execution.task_params) if execution.Execution.task_params else None,
+                "created_at": execution.Execution.created_at.isoformat(),
+                "completed_at": execution.Execution.completed_at.isoformat() if execution.Execution.completed_at else None
+            } for execution in executions
+        ]
+    }
+
 @router.get("/{crew_id}")
 async def get_crew(crew_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -162,13 +192,17 @@ async def get_crew(crew_id: int, db: AsyncSession = Depends(get_db)):
     if not crew:
         raise HTTPException(status_code=404, detail="Crew not found")
     
+    # Parse input and output variables from JSON strings
+    input_variables = json.loads(crew.input_variables) if crew.input_variables else {}
+    output_variables = json.loads(crew.output_variables) if crew.output_variables else {}
+    
     return {
-        "id": crew.id,
         "name": crew.name,
         "description": crew.description,
+        "input_variables": input_variables,
+        "output_variables": output_variables,
         "agents": [
             {
-                "id": agent.id,
                 "role": agent.role,
                 "goal": agent.goal,
                 "backstory": agent.backstory,
@@ -179,17 +213,18 @@ async def get_crew(crew_id: int, db: AsyncSession = Depends(get_db)):
                     "base_url": agent.llm_base_url,
                     "api_key": agent.llm_api_key,
                     "api_version": agent.llm_api_version
-                }
+                },
+                "allowed_tools": json.loads(agent.allowed_tools) if agent.allowed_tools else []
             } for agent in crew.agents
         ],
         "tasks": [
             {
-                "id": task.id,
                 "description": task.description,
-                "expected_output": task.expected_output,
                 "agent_role": task.agent.role,
+                "expected_output": task.expected_output,
                 "input_parameters": json.loads(task.input_parameters) if task.input_parameters else {},
                 "context_variables": json.loads(task.context_variables) if task.context_variables else {},
+                "output_variables": json.loads(task.output_variables) if task.output_variables else {},
                 "dependencies": json.loads(task.dependencies) if task.dependencies else []
             } for task in crew.tasks
         ]
@@ -198,7 +233,7 @@ async def get_crew(crew_id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/{crew_id}/execute")
 async def execute_crew(
     crew_id: int,
-    execution_params: Optional[CrewExecutionParams] = None,
+    execution_params: CrewExecutionParams,
     db: AsyncSession = Depends(get_db)
 ):
     result = await db.execute(
@@ -218,15 +253,18 @@ async def execute_crew(
     execution = DBExecution(
         crew_id=crew_id,
         status="in_progress",
-        input_variables=json.dumps(execution_params.input_variables) if execution_params and execution_params.input_variables else None,
-        task_params=json.dumps({k: v.dict() for k, v in execution_params.task_params.items()}) if execution_params and execution_params.task_params else None
+        input_variables=json.dumps(execution_params.inputs) if execution_params.inputs else None,
+        task_params=json.dumps(execution_params.allowed_tools) if execution_params.allowed_tools else None
     )
     db.add(execution)
     await db.flush()
-    
+
     try:
-        # Create CrewAI agents with configured LLM
-        agents = {}
+        # Get all available tools
+        tools_dict = get_available_tools()
+
+        # Create CrewAI agents
+        crewai_agents = []
         for db_agent in crew.agents:
             # Configure LLM based on provider
             if db_agent.llm_provider == "anthropic":
@@ -251,179 +289,76 @@ async def execute_crew(
                     api_version=db_agent.llm_api_version
                 )
 
-            print(f"Creating agent with LLM: {llm}")
+            # Filter tools based on allowed_tools
+            agent_tools = []
+            if db_agent.allowed_tools:
+                allowed_tools = json.loads(db_agent.allowed_tools)
+                for tool_name in allowed_tools:
+                    if tool_name in tools_dict:
+                        agent_tools.append(tools_dict[tool_name])
+
+            # Create agent with tools and LLM
             agent = Agent(
                 role=db_agent.role,
                 goal=db_agent.goal,
                 backstory=db_agent.backstory,
                 verbose=db_agent.verbose,
-                llm=llm
+                tools=agent_tools,  # Pass tools as a list
+                llm=llm  # Pass the configured LLM instance
             )
-            agents[db_agent.role] = agent
+            crewai_agents.append(agent)
 
         # Create CrewAI tasks
-        tasks = []
-        task_outputs = {}  # Store outputs from each task
-        
-        # First pass: Create all tasks
+        crewai_tasks = []
         for db_task in crew.tasks:
-            # Get task-specific parameters if provided
-            task_params = None
-            if execution_params and execution_params.task_params:
-                task_params = execution_params.task_params.get(str(db_task.id))
-
-            # Load parameter definitions
-            input_param_defs = json.loads(db_task.input_parameters) if db_task.input_parameters else {}
-            context_var_defs = json.loads(db_task.context_variables) if db_task.context_variables else {}
-            output_var_defs = json.loads(db_task.output_variables) if db_task.output_variables else {}
-
-            # Validate and prepare parameters
-            validated_input_params = {}
-            validated_context_vars = {}
-
-            # Add crew-level input variables to context
-            if execution_params and execution_params.input_variables:
-                for var_name, var_value in execution_params.input_variables.items():
-                    validated_context_vars[f"crew_{var_name}"] = var_value
-
-            # Add outputs from dependent tasks to context
-            if db_task.dependencies:
-                for dep_id in db_task.dependencies:
-                    if dep_id in task_outputs:
-                        for var_name, var_value in task_outputs[dep_id].items():
-                            validated_context_vars[f"task_{dep_id}_{var_name}"] = var_value
-
-            if task_params:
-                # Validate input parameters
-                if task_params.input_parameters:
-                    for param_name, param_value in task_params.input_parameters.items():
-                        if param_name not in input_param_defs:
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Unknown input parameter '{param_name}' for task {db_task.id}"
-                            )
-                        param_def = input_param_defs[param_name]
-                        validated_input_params[param_name] = param_value
-
-                # Validate context variables
-                if task_params.context_variables:
-                    for var_name, var_value in task_params.context_variables.items():
-                        if var_name not in context_var_defs:
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Unknown context variable '{var_name}' for task {db_task.id}"
-                            )
-                        var_def = context_var_defs[var_name]
-                        validated_context_vars[var_name] = var_value
-
-            # Use default values for missing required parameters
-            for param_name, param_def in input_param_defs.items():
-                if param_name not in validated_input_params:
-                    if param_def.get("required", True) and "default" not in param_def:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Missing required input parameter '{param_name}' for task {db_task.id}"
-                        )
-                    validated_input_params[param_name] = param_def.get("default")
-
-            for var_name, var_def in context_var_defs.items():
-                if var_name not in validated_context_vars:
-                    if var_def.get("required", True) and "default" not in var_def:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Missing required context variable '{var_name}' for task {db_task.id}"
-                        )
-                    validated_context_vars[var_name] = var_def.get("default")
-
-            # Prepare task description with validated parameters
-            description = db_task.description
-            if validated_input_params:
-                for param_name, param_value in validated_input_params.items():
-                    description = description.replace(f"{{{param_name}}}", str(param_value))
-            
-            if validated_context_vars:
-                for var_name, var_value in validated_context_vars.items():
-                    description = description.replace(f"{{{var_name}}}", str(var_value))
-
-            # Create the task with the enhanced description
             task = Task(
-                description=description,
-                agent=agents[db_task.agent.role],
-                expected_output=db_task.expected_output,
-                context=[f"{k}: {v}" for k, v in validated_context_vars.items()] if validated_context_vars else None
+                description=db_task.description,
+                agent=next(agent for agent in crewai_agents if agent.role == db_task.agent.role),
+                expected_output=db_task.expected_output
             )
-            tasks.append((db_task.id, task, output_var_defs))
+            crewai_tasks.append(task)
 
-        # Second pass: Execute tasks in order of dependencies
-        final_outputs = {}
-        for task_id, task, output_vars in tasks:
-            result = task.execute()
-            
-            # Parse and store task outputs
-            if output_vars:
-                task_outputs[task_id] = {}
-                # Here you would parse the result to extract the output variables
-                # This is a simple example - you might want more sophisticated parsing
-                for var_name in output_vars:
-                    # Look for the variable in the result
-                    # This is a simple example - you might want more sophisticated parsing
-                    if f"{var_name}:" in result:
-                        value = result.split(f"{var_name}:")[1].split("\n")[0].strip()
-                        task_outputs[task_id][var_name] = value
-                        final_outputs[f"task_{task_id}_{var_name}"] = value
+        # Create and execute crew
+        crew = Crew(
+            agents=crewai_agents,
+            tasks=crewai_tasks,
+            verbose=True
+        )
 
-        # Update execution record with success
+        # Execute crew with input variables
+        result = crew.kickoff(inputs=execution_params.inputs or {})
+
+        # CrewOutput object structure:
+        # - raw: str - The raw text output
+        # - pydantic: Optional[Any] - Pydantic model if output was structured
+        # - json_dict: Optional[Dict] - JSON representation if available
+        # - tasks_output: List[TaskOutput] - List of individual task outputs
+        #   - TaskOutput contains: description, name, expected_output, summary, raw, pydantic, json_dict, agent, output_format
+        # - token_usage: UsageMetrics - Token usage statistics
+        #   - UsageMetrics contains: total_tokens, prompt_tokens, cached_prompt_tokens, completion_tokens, successful_requests
+        raw_output = result.raw if hasattr(result, 'raw') else str(result)
+
+        # Update execution record
         execution.status = "completed"
-        execution.completed_at = datetime.utcnow()
-        execution.result = json.dumps({
-            "result": result,
-            "outputs": final_outputs
-        })
+        execution.result = json.dumps(result)
+        execution.completed_at = datetime.now(UTC)
         await db.commit()
 
-        return {
-            "id": execution.id,
-            "result": result,
-            "outputs": final_outputs
-        }
+        return {"result": raw_output}
+
     except Exception as e:
-        # Update execution record with error
         execution.status = "failed"
-        execution.completed_at = datetime.utcnow()
         execution.error = str(e)
+        execution.completed_at = datetime.now(UTC)
         await db.commit()
-        print(f"Error executing crew: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{crew_id}/executions")
 async def list_crew_executions(crew_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(DBExecution)
-        .where(DBExecution.crew_id == crew_id)
-        .order_by(DBExecution.created_at.desc())
-    )
-    executions = result.scalars().all()
-    
-    return {
-        "executions": [
-            {
-                "id": execution.id,
-                "status": execution.status,
-                "result": json.loads(execution.result) if execution.result else None,
-                "error": execution.error,
-                "input_variables": json.loads(execution.input_variables) if execution.input_variables else None,
-                "task_params": json.loads(execution.task_params) if execution.task_params else None,
-                "created_at": execution.created_at.isoformat(),
-                "completed_at": execution.completed_at.isoformat() if execution.completed_at else None
-            } for execution in executions
-        ]
-    }
-
-@router.get("/executions")
-async def list_all_executions(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
         select(DBExecution, DBCrew.name.label('crew_name'))
         .join(DBCrew, DBExecution.crew_id == DBCrew.id)
+        .where(DBExecution.crew_id == crew_id)
         .order_by(DBExecution.created_at.desc())
     )
     executions = result.all()
@@ -455,4 +390,82 @@ async def delete_crew(crew_id: int, db: AsyncSession = Depends(get_db)):
     
     await db.delete(crew)
     await db.commit()
-    return {"message": f"Crew {crew.name} deleted successfully"} 
+    return {"message": f"Crew {crew.name} deleted successfully"}
+
+@router.put("/{crew_id}")
+async def update_crew(crew_id: int, crew_config: CrewConfig, db: AsyncSession = Depends(get_db)):
+    try:
+        # Check if crew exists
+        result = await db.execute(select(DBCrew).where(DBCrew.id == crew_id))
+        db_crew = result.scalar_one_or_none()
+        if not db_crew:
+            raise HTTPException(status_code=404, detail="Crew not found")
+
+        # Check if new name conflicts with existing crew
+        if crew_config.name != db_crew.name:
+            result = await db.execute(select(DBCrew).where(DBCrew.name == crew_config.name))
+            if result.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="Crew name already exists")
+
+        # Update crew details
+        db_crew.name = crew_config.name
+        db_crew.description = crew_config.description
+        db_crew.input_variables = json.dumps(crew_config.input_variables) if crew_config.input_variables else None
+        db_crew.output_variables = json.dumps(crew_config.output_variables) if crew_config.output_variables else None
+
+        # Delete existing agents and tasks
+        await db.execute(text("DELETE FROM crew_agent_association WHERE crew_id = :crew_id"), {"crew_id": crew_id})
+        await db.execute(text("DELETE FROM tasks WHERE crew_id = :crew_id"), {"crew_id": crew_id})
+        await db.execute(text("DELETE FROM agents WHERE id IN (SELECT agent_id FROM crew_agent_association WHERE crew_id = :crew_id)"), {"crew_id": crew_id})
+
+        # Create new agents
+        agents = {}
+        for agent_config in crew_config.agents:
+            llm_config = agent_config.llm_config or LLMConfig()
+            db_agent = DBAgent(
+                role=agent_config.role,
+                goal=agent_config.goal,
+                backstory=agent_config.backstory,
+                verbose=agent_config.verbose,
+                llm_provider=llm_config.provider,
+                llm_model=llm_config.model,
+                llm_base_url=llm_config.base_url,
+                llm_api_key=llm_config.api_key,
+                llm_api_version=llm_config.api_version,
+                allowed_tools=json.dumps(agent_config.allowed_tools) if agent_config.allowed_tools else None
+            )
+            db.add(db_agent)
+            await db.flush()
+            agents[agent_config.role] = db_agent
+
+        # Create new tasks
+        for task_config in crew_config.tasks:
+            if task_config.agent_role not in agents:
+                raise HTTPException(status_code=400, detail=f"Agent role {task_config.agent_role} not found")
+            
+            db_task = DBTask(
+                description=task_config.description,
+                expected_output=task_config.expected_output,
+                input_parameters=json.dumps(task_config.input_parameters) if task_config.input_parameters else None,
+                context_variables=json.dumps(task_config.context_variables) if task_config.context_variables else None,
+                output_variables=json.dumps(task_config.output_variables) if task_config.output_variables else None,
+                dependencies=json.dumps(task_config.dependencies) if task_config.dependencies else None,
+                crew_id=crew_id,
+                agent_id=agents[task_config.agent_role].id
+            )
+            db.add(db_task)
+
+        # Add agents to crew
+        for agent in agents.values():
+            await db.execute(
+                text("INSERT INTO crew_agent_association (crew_id, agent_id) VALUES (:crew_id, :agent_id)"),
+                {"crew_id": crew_id, "agent_id": agent.id}
+            )
+
+        await db.commit()
+        return {"message": f"Crew {crew_config.name} updated successfully"}
+
+    except Exception as e:
+        print(f"Error updating crew: {str(e)}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e)) 

@@ -1,166 +1,145 @@
-# CrewAI UI
+# Agent Workforce
 
-A modern web interface for managing and interacting with CrewAI agents and crews.
+A FastAPI-based application for managing and executing AI agent crews.
 
 ## Features
 
-- Create and manage crews of AI agents
-- Define agent roles and goals
-- Create and assign tasks to agents
-- Real-time task execution and monitoring
-- Modern, responsive UI built with React and Tailwind CSS
+- Create and manage AI agent crews
+- Execute crews with custom inputs
+- View execution history and results
+- Support for multiple LLM providers (Anthropic, OpenAI)
+- Integration with various tools (Weather, News, Jira, Confluence)
+- Selective tool access for agents
 
 ## Prerequisites
 
-- Python 3.9+
-- Node.js 16+
-- PostgreSQL (optional, can use SQLite for development)
-- Poetry (Python package manager)
+- Python 3.11 or higher
+- Poetry for dependency management
+- API keys for:
+  - Anthropic (required)
+  - OpenWeather (optional, for weather tool)
+  - NewsAPI (optional, for news tool)
+  - Atlassian (optional, for Jira and Confluence tools)
 
-## Setup
+## Installation
 
-### Database Setup
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/agent-workforce.git
+cd agent-workforce
+```
 
-The application supports both PostgreSQL and SQLite databases. You can choose which one to use by setting the `DATABASE_TYPE` environment variable.
+2. Install dependencies using Poetry:
+```bash
+poetry install
+```
 
-#### PostgreSQL (Production)
+3. Create a `.env` file in the root directory with your API keys and configuration:
+```bash
+cp .env.example .env
+```
 
-1. Install PostgreSQL:
-   ```bash
-   # macOS
-   brew install postgresql
-   
-   # Ubuntu
-   sudo apt-get install postgresql postgresql-contrib
-   ```
+Then edit the `.env` file to add your API keys and configuration.
 
-2. Create a database:
-   ```bash
-   createdb crewai_db
-   ```
+## Running the Application
 
-3. Configure environment variables in `.env`:
-   ```
-   DATABASE_TYPE=postgresql
-   POSTGRES_USER=your_username
-   POSTGRES_PASSWORD=your_password
-   POSTGRES_HOST=localhost
-   POSTGRES_PORT=5432
-   POSTGRES_DB=crewai_db
-   POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
-   ```
+Start the server with hot reload:
+```bash
+poetry run uvicorn app.main:app --reload
+```
 
-#### SQLite (Development)
+The API will be available at `http://localhost:8000`
 
-For development and testing, you can use SQLite with an in-memory database:
+API documentation is available at:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
 
-1. Configure environment variables in `.env`:
-   ```
-   DATABASE_TYPE=sqlite
-   SQLITE_URL=sqlite+aiosqlite:///:memory:
-   ```
+## API Endpoints
 
-### Backend Setup
+### Crews
 
-1. Install Poetry:
-   ```bash
-   curl -sSL https://install.python-poetry.org | python3 -
-   ```
+- `POST /crews/`: Create a new crew
+- `GET /crews/`: List all crews
+- `GET /crews/{crew_id}`: Get crew details
+- `PUT /crews/{crew_id}`: Update a crew
+- `DELETE /crews/{crew_id}`: Delete a crew
+- `POST /crews/{crew_id}/execute`: Execute a crew
 
-2. Install dependencies:
-   ```bash
-   poetry install
-   ```
+### Executions
 
-3. Create a `.env` file:
-   ```bash
-   cp .env.example .env
-   ```
-   Then edit `.env` and add your OpenAI API key and database configuration.
-
-4. Start the backend server:
-   ```bash
-   poetry run uvicorn app.main:app --reload
-   ```
-
-### Frontend Setup
-
-1. Install dependencies:
-   ```bash
-   cd frontend
-   npm install
-   ```
-
-2. Start the development server:
-   ```bash
-   npm run dev
-   ```
-
-## API Documentation
-
-Once the backend is running, you can access the API documentation at:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- `GET /executions/`: List all executions
+- `GET /executions/{execution_id}`: Get execution details
 
 ## Environment Variables
 
-The application uses the following environment variables:
+Required:
+- `ANTHROPIC_API_KEY`: Your Anthropic API key
 
-### Required
-- `OPENAI_API_KEY`: Your OpenAI API key
-- `DATABASE_TYPE`: Database type ('postgresql' or 'sqlite')
+Optional:
+- `OPENWEATHER_API_KEY`: For weather tool
+- `NEWS_API_KEY`: For news tool
+- `ATLASSIAN_API_TOKEN`: For Jira and Confluence tools
+- `ATLASSIAN_EMAIL`: For Jira and Confluence tools
+- `ATLASSIAN_URL`: For Jira and Confluence tools
+- `CONFLUENCE_BASE_URL`: For Confluence tool
+- `CONFLUENCE_EMAIL`: For Confluence tool
+- `CONFLUENCE_API_TOKEN`: For Confluence tool
+- `CONFLUENCE_CLOUD`: Set to true for cloud instance, false for server instance
+- `JIRA_BASE_URL`: For Jira tool
+- `JIRA_EMAIL`: For Jira tool
+- `JIRA_API_TOKEN`: For Jira tool
+- `JIRA_CLOUD`: Set to true for cloud instance, false for server instance
 
-### PostgreSQL Configuration (if using PostgreSQL)
-- `POSTGRES_USER`: PostgreSQL username
-- `POSTGRES_PASSWORD`: PostgreSQL password
-- `POSTGRES_HOST`: PostgreSQL host
-- `POSTGRES_PORT`: PostgreSQL port
-- `POSTGRES_DB`: PostgreSQL database name
-- `POSTGRES_URL`: PostgreSQL connection URL
+## Development
 
-### SQLite Configuration (if using SQLite)
-- `SQLITE_URL`: SQLite connection URL (use `sqlite+aiosqlite:///:memory:` for in-memory database)
-
-### Optional
-- `DEBUG`: Enable debug mode (true/false)
-- `LOG_LEVEL`: Logging level (debug/info/warning/error)
-
-## Development Tools
-
-### Database Migrations
-
-The project uses Alembic for database migrations. To create and apply migrations:
-
-1. Create a new migration:
-   ```bash
-   poetry run alembic revision --autogenerate -m "description of changes"
-   ```
-
-2. Apply migrations:
-   ```bash
-   poetry run alembic upgrade head
-   ```
-
-### Code Formatting
-
-The project uses Black for Python code formatting and Prettier for frontend code:
+The project uses Poetry for dependency management. To add new dependencies:
 
 ```bash
-# Format Python code
-poetry run black .
-
-# Format frontend code
-cd frontend
-npm run format
+poetry add package-name
 ```
 
-### Type Checking
-
-The project uses mypy for Python type checking:
+To update dependencies:
 
 ```bash
-poetry run mypy .
+poetry update
 ```
+
+### Database
+
+The project currently uses SQLite for simplicity. Database migrations with Alembic are not implemented at this time. The database schema is managed through SQLAlchemy models and will be created automatically when the application starts.
+
+### Available Tools
+
+The following tools are available for use with agents:
+
+- `WebSearch`: Search the web for current information and news
+- `Weather`: Get current weather information for a location
+- `News`: Get the latest news articles based on a query
+- `CreateJiraIssue`: Create a new Jira issue
+- `UpdateJiraIssue`: Update an existing Jira issue
+- `DeleteJiraIssue`: Delete a Jira issue
+- `AddJiraComment`: Add a comment to a Jira issue
+- `GetJiraIssue`: Get a Jira issue by key
+- `SearchJiraIssues`: Search for Jira issues using JQL
+- `CreateConfluencePage`: Create a new Confluence page
+- `UpdateConfluencePage`: Update an existing Confluence page
+- `DeleteConfluencePage`: Delete a Confluence page
+- `GetConfluencePage`: Get a Confluence page by ID
+- `SearchConfluencePages`: Search for Confluence pages using CQL
+
+When executing a crew, you can specify which tools should be available to the agents using the `allowed_tools` parameter. For example:
+
+```python
+execution_params = {
+    "inputs": {
+        "location": "New York",
+        "topic": "AI"
+    },
+    "allowed_tools": ["WebSearch", "Weather", "News"]
+}
+```
+
+If `allowed_tools` is not specified, all available tools will be provided to the agents.
 
 ## License
 

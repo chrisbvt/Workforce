@@ -16,6 +16,7 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
+  Chip,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import EditIcon from '@mui/icons-material/Edit';
@@ -24,7 +25,7 @@ import axios from 'axios';
 const API_URL = 'http://localhost:8000/api';
 
 function CrewDetail() {
-  const { crewId } = useParams();
+  const { id } = useParams();
   const navigate = useNavigate();
   const [crew, setCrew] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -36,11 +37,11 @@ function CrewDetail() {
 
   useEffect(() => {
     fetchCrew();
-  }, [crewId]);
+  }, [id]);
 
   const fetchCrew = async () => {
     try {
-      const response = await axios.get(`${API_URL}/crews/${crewId}`);
+      const response = await axios.get(`${API_URL}/crews/${id}`);
       setCrew(response.data);
       setLoading(false);
     } catch (err) {
@@ -118,7 +119,15 @@ function CrewDetail() {
 
   const handleExecuteWithParams = async () => {
     try {
-      const response = await axios.post(`${API_URL}/crews/${crew.id}/execute`, inputParams);
+      const response = await axios.post(`${API_URL}/crews/${crew.id}/execute`, {
+        inputs: {
+          ...inputParams.input_variables,
+          ...Object.entries(inputParams.task_params).reduce((acc, [taskId, params]) => ({
+            ...acc,
+            ...params.input_parameters
+          }), {})
+        }
+      });
       setExecutionResult(response.data.result);
       setShowParamsDialog(false);
       setShowResultDialog(true);
@@ -129,7 +138,7 @@ function CrewDetail() {
 
   const handleDelete = async () => {
     try {
-      await axios.delete(`${API_URL}/crews/${crewId}`);
+      await axios.delete(`${API_URL}/crews/${id}`);
       navigate('/');
     } catch (err) {
       setError('Failed to delete crew');
@@ -163,14 +172,14 @@ function CrewDetail() {
             variant="contained"
             color="primary"
             startIcon={<EditIcon />}
-            onClick={() => navigate(`/crew/${crewId}/edit`)}
+            onClick={() => navigate(`/crew/${id}/edit`)}
           >
             Edit
           </Button>
           <Button
             variant="contained"
             color="secondary"
-            onClick={() => navigate(`/crew/${crewId}/executions`)}
+            onClick={() => navigate(`/crew/${id}/executions`)}
           >
             View Executions
           </Button>
@@ -226,6 +235,24 @@ function CrewDetail() {
                   <Typography variant="body2" color="text.secondary" gutterBottom>
                     API Version: {agent.llm_config.api_version}
                   </Typography>
+                )}
+                {agent.allowed_tools && agent.allowed_tools.length > 0 && (
+                  <>
+                    <Typography variant="subtitle2" sx={{ mt: 2 }} gutterBottom>
+                      Allowed Tools
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                      {agent.allowed_tools.map((tool, index) => (
+                        <Chip
+                          key={index}
+                          label={tool}
+                          size="small"
+                          color="primary"
+                          variant="outlined"
+                        />
+                      ))}
+                    </Box>
+                  </>
                 )}
               </Paper>
             ))}

@@ -56,9 +56,9 @@ function App() {
             <Routes>
               <Route path="/" element={<CrewList />} />
               <Route path="/create" element={<CrewCreate />} />
-              <Route path="/crew/:crewId" element={<CrewDetail />} />
-              <Route path="/crew/:crewId/edit" element={<CrewEdit />} />
-              <Route path="/crew/:crewId/executions" element={<CrewExecutions />} />
+              <Route path="/crew/:id" element={<CrewDetail />} />
+              <Route path="/crew/:id/edit" element={<CrewEdit />} />
+              <Route path="/crew/:id/executions" element={<CrewExecutions />} />
               <Route path="/executions" element={<Executions />} />
             </Routes>
           </Container>
