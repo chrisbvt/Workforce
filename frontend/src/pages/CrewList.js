@@ -119,18 +119,22 @@ function CrewList() {
 
   const handleExecuteWithParams = async () => {
     try {
-      if (!selectedCrew || !selectedCrew.id) {
+      if (!selectedCrew) {
         setError('No crew selected');
         return;
       }
 
-      const response = await axios.post(`${API_URL}/crews/${selectedCrew.id}/execute`, {
+      // Get the crew ID from the original crew list
+      const crewId = crews.find(c => c.name === selectedCrew.name)?.id;
+      if (!crewId) {
+        setError('Could not find crew ID');
+        return;
+      }
+
+      const response = await axios.post(`${API_URL}/crews/${crewId}/execute`, {
         inputs: {
           ...inputParams.input_variables,
-          ...Object.entries(inputParams.task_params).reduce((acc, [taskId, params]) => ({
-            ...acc,
-            ...params.input_parameters
-          }), {})
+          task_params: inputParams.task_params
         }
       });
       setExecutionResult(response.data.result);
