@@ -219,6 +219,7 @@ async def get_crew(crew_id: int, db: AsyncSession = Depends(get_db)):
         ],
         "tasks": [
             {
+                "id": task.id,
                 "description": task.description,
                 "agent_role": task.agent.role,
                 "expected_output": task.expected_output,
@@ -259,99 +260,115 @@ async def execute_crew(
     db.add(execution)
     await db.flush()
 
-    try:
-        # Get all available tools
-        tools_dict = get_available_tools()
+    # Get all available tools
+    tools_dict = get_available_tools()
 
-        # Create CrewAI agents
-        crewai_agents = []
-        for db_agent in crew.agents:
-            # Configure LLM based on provider
-            if db_agent.llm_provider == "anthropic":
-                if db_agent.llm_api_key:
-                    os.environ["ANTHROPIC_API_KEY"] = db_agent.llm_api_key
-                from langchain_anthropic import ChatAnthropic
-                llm = ChatAnthropic(model=db_agent.llm_model)
-            elif db_agent.llm_provider == "openai":
-                if db_agent.llm_api_key:
-                    os.environ["OPENAI_API_KEY"] = db_agent.llm_api_key
-                from langchain_openai import ChatOpenAI
-                llm = ChatOpenAI(
-                    model=db_agent.llm_model,
-                    api_version=db_agent.llm_api_version
-                )
-            elif db_agent.llm_provider == "openai_compatible":
-                from langchain_openai import ChatOpenAI
-                llm = ChatOpenAI(
-                    model=db_agent.llm_model,
-                    base_url=db_agent.llm_base_url,
-                    api_key=db_agent.llm_api_key,
-                    api_version=db_agent.llm_api_version
-                )
-
-            # Filter tools based on allowed_tools
-            agent_tools = []
-            if db_agent.allowed_tools:
-                allowed_tools = json.loads(db_agent.allowed_tools)
-                for tool_name in allowed_tools:
-                    if tool_name in tools_dict:
-                        agent_tools.append(tools_dict[tool_name])
-
-            # Create agent with tools and LLM
-            agent = Agent(
-                role=db_agent.role,
-                goal=db_agent.goal,
-                backstory=db_agent.backstory,
-                verbose=db_agent.verbose,
-                tools=agent_tools,  # Pass tools as a list
-                llm=llm  # Pass the configured LLM instance
+    # Create CrewAI agents
+    crewai_agents = []
+    for db_agent in crew.agents:
+        # Configure LLM based on provider
+        if db_agent.llm_provider == "anthropic":
+            if db_agent.llm_api_key:
+                os.environ["ANTHROPIC_API_KEY"] = db_agent.llm_api_key
+            from langchain_anthropic import ChatAnthropic
+            llm = ChatAnthropic(model=db_agent.llm_model)
+        elif db_agent.llm_provider == "openai":
+            if db_agent.llm_api_key:
+                os.environ["OPENAI_API_KEY"] = db_agent.llm_api_key
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                model=db_agent.llm_model,
+                api_version=db_agent.llm_api_version
             )
-            crewai_agents.append(agent)
-
-        # Create CrewAI tasks
-        crewai_tasks = []
-        for db_task in crew.tasks:
-            task = Task(
-                description=db_task.description,
-                agent=next(agent for agent in crewai_agents if agent.role == db_task.agent.role),
-                expected_output=db_task.expected_output
+        elif db_agent.llm_provider == "openai_compatible":
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                model=db_agent.llm_model,
+                base_url=db_agent.llm_base_url,
+                api_key=db_agent.llm_api_key,
+                api_version=db_agent.llm_api_version
             )
-            crewai_tasks.append(task)
 
-        # Create and execute crew
-        crew = Crew(
-            agents=crewai_agents,
-            tasks=crewai_tasks,
-            verbose=True
+        # Filter tools based on allowed_tools
+        agent_tools = []
+        if db_agent.allowed_tools:
+            allowed_tools = json.loads(db_agent.allowed_tools)
+            for tool_name in allowed_tools:
+                if tool_name in tools_dict:
+                    agent_tools.append(tools_dict[tool_name])
+
+        # Create agent with tools and LLM
+        agent = Agent(
+            role=db_agent.role,
+            goal=db_agent.goal,
+            backstory=db_agent.backstory,
+            verbose=db_agent.verbose,
+            tools=agent_tools,  # Pass tools as a list
+            llm=llm  # Pass the configured LLM instance
         )
+        crewai_agents.append(agent)
 
-        # Execute crew with input variables
-        result = crew.kickoff(inputs=execution_params.inputs or {})
+    # Create CrewAI tasks
+    crewai_tasks = []
+    for db_task in crew.tasks:
+        task = Task(
+            description=db_task.description,
+            agent=next(agent for agent in crewai_agents if agent.role == db_task.agent.role),
+            expected_output=db_task.expected_output
+        )
+        crewai_tasks.append(task)
 
-        # CrewOutput object structure:
-        # - raw: str - The raw text output
-        # - pydantic: Optional[Any] - Pydantic model if output was structured
-        # - json_dict: Optional[Dict] - JSON representation if available
-        # - tasks_output: List[TaskOutput] - List of individual task outputs
-        #   - TaskOutput contains: description, name, expected_output, summary, raw, pydantic, json_dict, agent, output_format
-        # - token_usage: UsageMetrics - Token usage statistics
-        #   - UsageMetrics contains: total_tokens, prompt_tokens, cached_prompt_tokens, completion_tokens, successful_requests
-        raw_output = result.raw if hasattr(result, 'raw') else str(result)
+    # Create and execute crew
+    crew = Crew(
+        agents=crewai_agents,
+        tasks=crewai_tasks,
+        verbose=True
+    )
 
-        # Update execution record
-        execution.status = "completed"
-        execution.result = json.dumps(result)
-        execution.completed_at = datetime.now(UTC)
-        await db.commit()
+    # Execute crew with input variables
+    inputs = execution_params.inputs or {}
 
-        return {"result": raw_output}
+    # Flatten all task input_parameters to the top-level for CrewAI
+    if "task_params" in inputs:
+        for task_id, params in inputs["task_params"].items():
+            if "input_parameters" in params:
+                for k, v in params["input_parameters"].items():
+                    if k not in inputs:
+                        inputs[k] = v
 
+    # Also flatten crew-level input_variables
+    if "input_variables" in inputs:
+        for k, v in inputs["input_variables"].items():
+            inputs[k] = v
+
+    result = crew.kickoff(inputs=inputs)
+
+    # CrewOutput object structure:
+    # - raw: str - The raw text output
+    # - pydantic: Optional[Any] - Pydantic model if output was structured
+    # - json_dict: Optional[Dict] - JSON representation if available
+    # - tasks_output: List[TaskOutput] - List of individual task outputs
+    #   - TaskOutput contains: description, name, expected_output, summary, raw, pydantic, json_dict, agent, output_format
+    # - token_usage: UsageMetrics - Token usage statistics
+    #   - UsageMetrics contains: total_tokens, prompt_tokens, cached_prompt_tokens, completion_tokens, successful_requests
+    raw_output = result.raw if hasattr(result, 'raw') else str(result)
+
+    # Update execution record
+    execution.status = "completed"
+    execution.result = json.dumps(raw_output)
+    execution.completed_at = datetime.now(UTC)
+    await db.commit()
+
+    return {"result": raw_output}
+
+    """
     except Exception as e:
         execution.status = "failed"
         execution.error = str(e)
         execution.completed_at = datetime.now(UTC)
         await db.commit()
         raise HTTPException(status_code=500, detail=str(e))
+    """
 
 @router.get("/{crew_id}/executions")
 async def list_crew_executions(crew_id: int, db: AsyncSession = Depends(get_db)):

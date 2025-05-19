@@ -133,7 +133,7 @@ function CrewList() {
 
       const response = await axios.post(`${API_URL}/crews/${crewId}/execute`, {
         inputs: {
-          ...inputParams.input_variables,
+          input_variables: inputParams.input_variables,
           task_params: inputParams.task_params
         }
       });
