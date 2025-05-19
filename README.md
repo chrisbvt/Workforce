@@ -141,6 +141,11 @@ execution_params = {
 
 If `allowed_tools` is not specified, all available tools will be provided to the agents.
 
+## TODO
+
+- [ ] Fix tool selection and tool handling to ensure agents only have access to the correct tools during execution.
+- [ ] Improve tool configuration and error handling for agent-tool integration.
+
 ## License
 
 MIT 
